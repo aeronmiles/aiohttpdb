@@ -1,16 +1,26 @@
+"""
+This module provides a class for managing an asynchronous SQLite database.
+"""
 import asyncio
 import os
 from pathlib import Path
 import pickle
 import sqlite3
 from typing import Any, Iterable, Optional, Union
-from loguru import logger
-from pandas import DataFrame
-import aiosqlite
 import zlib
 
+from loguru import logger
+import aiosqlite
+
+try:
+    from pandas import DataFrame
+except ImportError:
+    logger.error("Failed to import pandas. DataFrame functionality will not be available.")
 
 class AsyncPickleSQLiteDB:
+    """
+    This class provides methods for managing an asynchronous SQLite database.
+    """
     def __init__(self, data_path: Path, name: str = 'db', permissions: str = 'crw'):
         """
         Initializes the database.
@@ -29,6 +39,7 @@ class AsyncPickleSQLiteDB:
             if not 'c' in self._permissions:
                 raise PermissionError(
                     "No database found, create permission not granted.")
+
 
     async def _get_connection(self):
         if self._conn is None:

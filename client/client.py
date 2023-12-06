@@ -1,3 +1,7 @@
+"""
+This module contains classes and functions for handling HTTP requests and rate limiting.
+"""
+
 from abc import ABC
 import asyncio
 from functools import wraps
@@ -12,11 +16,14 @@ from aiohttp import (
 )
 from ..db.db_manager import DatabaseManager
 
-
-RequestorSubType = TypeVar("RequestorSubType", bound="Requestor")
+REQUESTOR_SUB_TYPE = TypeVar("REQUESTOR_SUB_TYPE", bound="Requestor")
 
 
 class Requestor(ABC):
+    """
+    This class represents a Requestor which handles HTTP requests and caching.
+    """
+
     def __init__(
         self,
         db_manager: DatabaseManager,
@@ -31,59 +38,34 @@ class Requestor(ABC):
         self.__required_params = required_params
         self.__request_func = request_func
         self.__async_tasks: List[Coroutine] = []
-        self._cached_only: bool = False
-        self._return_data: bool = True
-        self._save: bool = True
-        self._delete_from_db: bool = False
-        self._default_return_value = default_return_value
+        self._settings = {
+            "cached_only": False,
+            "return_data": True,
+            "save": True,
+            "delete_from_db": False,
+            "default_return_value": default_return_value,
+        }
 
     def cached_only(
-        self: RequestorSubType, cached_only: bool = True
-    ) -> RequestorSubType:
-        self._cached_only = cached_only
+        self: REQUESTOR_SUB_TYPE, cached_only: bool = True
+    ) -> REQUESTOR_SUB_TYPE:
+        self._settings["cached_only"] = cached_only
         return self
 
-    def return_data(self: RequestorSubType, return_data: bool) -> RequestorSubType:
-        self._return_data = return_data
+    def return_data(self: REQUESTOR_SUB_TYPE, return_data: bool) -> REQUESTOR_SUB_TYPE:
+        self._settings["return_data"] = return_data
         return self
 
-    def save(self: RequestorSubType, save: bool) -> RequestorSubType:
-        self._save = save
+    def save(self: REQUESTOR_SUB_TYPE, save: bool) -> REQUESTOR_SUB_TYPE:
+        self._settings["save"] = save
         return self
 
-    def delete_from_db(self: RequestorSubType) -> RequestorSubType:
+    def delete_from_db(self: REQUESTOR_SUB_TYPE) -> REQUESTOR_SUB_TYPE:
         if not self.__required_params():
             raise RuntimeError("Required params not set")
 
         self.__async_tasks.append(self.__dbm.delete_encoded(self.endpoint, self.params))
         return self
-    
-    async def request_only(self) -> None:
-        if await self.__dbm.contains_encoded(self.endpoint, self.params):
-            return
-        await self.request()
-
-    async def request(self) -> Union[List, Dict]:
-        """Request order book for symbol and save them to cache"""
-        if not self.__required_params():
-            raise RuntimeError("Required params not set")
-
-        if self.__async_tasks:
-            for t in self.__async_tasks:
-                await t
-            self.__async_tasks = []
-
-        resp = await self.__dbm.fetch_encoded(
-            self.endpoint,
-            self.__request_func,
-            self.params,
-            self._cached_only,
-            self._save,
-        )
-        if not self._return_data or not resp:
-            return self._default_return_value
-        else:
-            return resp
 
 
 class RateLimitContext:

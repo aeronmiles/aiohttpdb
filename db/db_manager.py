@@ -1,14 +1,23 @@
-import json
+"""
+This module provides a class for managing a database.
+"""
 from hashlib import blake2b
 from pathlib import Path
-from pandas import DataFrame
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 
-from .sqlite import AsyncPickleSQLiteDB
 from loguru import logger
 
+from .sqlite import AsyncPickleSQLiteDB
+
+try:
+    from pandas import DataFrame
+except ImportError:
+    logger.error("Failed to import pandas. DataFrame functionality will not be available.")
 
 class DatabaseManager:
+    """
+    This class provides methods for managing a database.
+    """
     _instance: Dict[str, 'DatabaseManager'] = {}
 
     def __new__(cls, data_path: str, db_name: str = 'db', cache_name: str = 'cache'):
@@ -26,6 +35,9 @@ class DatabaseManager:
             cls._DBCache = AsyncPickleSQLiteDB(cls._data_path, cache_name)
 
     def get_db(self, namespace: str) -> AsyncPickleSQLiteDB:
+        """
+        Get the database for the given namespace.
+        """
         return self._DBCache if 'cache' in namespace else self._DB
 
     async def clear_cache(self):
