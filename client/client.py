@@ -1,3 +1,6 @@
+"""
+This module provides classes for managing HTTP requests and rate limiting.
+"""
 from abc import ABC
 import asyncio
 from functools import wraps
@@ -12,11 +15,12 @@ from aiohttp import (
 )
 from ..db.db_manager import DatabaseManager
 
-
-RequestorSubType = TypeVar("RequestorSubType", bound="Requestor")
-
+RequestorType = TypeVar("RequestorType", bound="Requestor")
 
 class Requestor(ABC):
+    """
+    This class provides methods for managing HTTP requests.
+    """
     def __init__(
         self,
         db_manager: DatabaseManager,
@@ -38,20 +42,20 @@ class Requestor(ABC):
         self._default_return_value = default_return_value
 
     def cached_only(
-        self: RequestorSubType, cached_only: bool = True
-    ) -> RequestorSubType:
+        self: RequestorType, cached_only: bool = True
+    ) -> RequestorType:
         self._cached_only = cached_only
         return self
 
-    def return_data(self: RequestorSubType, return_data: bool) -> RequestorSubType:
+    def return_data(self: RequestorType, return_data: bool) -> RequestorType:
         self._return_data = return_data
         return self
 
-    def save(self: RequestorSubType, save: bool) -> RequestorSubType:
+    def save(self: RequestorType, save: bool) -> RequestorType:
         self._save = save
         return self
 
-    def delete_from_db(self: RequestorSubType) -> RequestorSubType:
+    def delete_from_db(self: RequestorType) -> RequestorType:
         if not self.__required_params():
             raise RuntimeError("Required params not set")
 
