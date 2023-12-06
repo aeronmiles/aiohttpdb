@@ -129,8 +129,8 @@ class RateLimitContext:
 
 
 class Client(ABC):
-    def __init__(self, base: str, headers: dict):
-        self.base = base
+    def __init__(self, base_url: str, headers: dict):
+        self.base_url = base_url
         self._headers = headers
         self._session = aiohttp.ClientSession(headers=self._headers)
 
@@ -157,7 +157,7 @@ class Client(ABC):
         allow_redirects: bool = True,
         **kwargs: Any,
     ) -> dict:
-        url = f"{self.base}{endpoint}"
+        url = f"{self.base_url}{endpoint}"
         if request:
             url += f"?{request}"
 
@@ -167,17 +167,17 @@ class Client(ABC):
             return await self._handle(response)
 
     async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
-        url = f"{self.base}{endpoint}"
+        url = f"{self.base_url}{endpoint}"
         async with self._session.post(url, data=data, **kwargs) as response:
             return await self._handle(response)
 
     async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
-        url = f"{self.base}{endpoint}"
+        url = f"{self.base_url}{endpoint}"
         async with self._session.put(url, data=data, **kwargs) as response:
             return await self._handle(response)
 
     async def _delete(self, endpoint: str, **kwargs: Any) -> dict:
-        url = f"{self.base}{endpoint}"
+        url = f"{self.base_url}{endpoint}"
         async with self._session.delete(url, **kwargs) as response:
             return await self._handle(response)
 
@@ -200,33 +200,3 @@ class Client(ABC):
         except Exception as e:
             # Catch any other exceptions
             raise RuntimeError("Unexpected error occurred: ", str(e)) from e
-
-    # @abstractmethod
-    # async def post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> aiohttp.ClientResponse:
-    #     raise NotImplementedError
-
-    # @abstractmethod
-    # async def delete_signed(self, signed_request: str, **kwargs: Any) -> aiohttp.ClientResponse:
-    #     raise NotImplementedError
-
-    # @abstractmethod
-    # async def get(
-    #     self,
-    #     endpoint: str,
-    #     request: Optional[str] = None,
-    #     allow_redirects: bool = True,
-    #     **kwargs: Any,
-    # ) -> aiohttp.ClientResponse:
-    #     raise NotImplementedError
-
-    # @abstractmethod
-    # async def post(self, endpoint: str, data: Any = None, **kwargs: Any) -> aiohttp.ClientResponse:
-    #     raise NotImplementedError
-
-    # @abstractmethod
-    # async def put(self, endpoint: str, data: Any = None, **kwargs: Any) -> aiohttp.ClientResponse:
-    #     raise NotImplementedError
-
-    # @abstractmethod
-    # async def delete(self, endpoint: str, **kwargs: Any) -> aiohttp.ClientResponse:
-    #     raise NotImplementedError
