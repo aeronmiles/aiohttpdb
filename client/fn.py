@@ -20,3 +20,15 @@ def sign_sha256(host: str, endpoint: str, secret: str, request: Optional[str]) -
 
     # Constructing and returning the final URL
     return f"{host}{endpoint}?{req_body}"
+
+
+def flatten_params(params):
+    flat_params = []
+    for key, value in params.items():
+        if isinstance(value, list):
+            # Append each list item as a separate parameter
+            for item in value:
+                flat_params.append((f"{key}[]", item))
+        else:
+            flat_params.append((key, value))
+    return flat_params

@@ -1,1 +1,1 @@
-from .client import Client, Requestor, RateLimitContext
+from .client import AsyncClient, Requestor, RateLimitContext

@@ -2,9 +2,9 @@
 This module provides a class for managing a database.
 """
 from hashlib import blake2b
+import json
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
-
 from loguru import logger
 
 from .sqlite import AsyncPickleSQLiteDB

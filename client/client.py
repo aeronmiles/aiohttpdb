@@ -6,16 +6,11 @@ import asyncio
 from functools import wraps
 import time
 from typing import Any, Callable, Coroutine, Dict, List, Optional, TypeVar, Union
-import aiohttp
-from aiohttp import (
-    ClientError,
-    ClientResponseError,
-    ClientConnectionError,
-    ClientPayloadError,
-)
+import httpx
 from ..db.db_manager import DatabaseManager
 
 RequestorType = TypeVar("RequestorType", bound="Requestor")
+
 
 class Requestor(ABC):
     """
@@ -25,11 +20,11 @@ class Requestor(ABC):
         self,
         db_manager: DatabaseManager,
         endpoint: str,
-        required_params: Callable[[], bool],
+        required_params: List[str],
         request_func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]],
         default_return_value: Any,
     ) -> None:
-        self.__dbm = db_manager
+        self._dbm = db_manager
         self.endpoint = endpoint
         self.params = {}
         self.__required_params = required_params
@@ -40,6 +35,9 @@ class Requestor(ABC):
         self._save: bool = True
         self._delete_from_db: bool = False
         self._default_return_value = default_return_value
+    
+    def __has_required_params(self) -> bool:
+        return all([p in self.params for p in self.__required_params])
 
     def cached_only(
         self: RequestorType, cached_only: bool = True
@@ -56,20 +54,20 @@ class Requestor(ABC):
         return self
 
     def delete_from_db(self: RequestorType) -> RequestorType:
-        if not self.__required_params():
+        if not self.__has_required_params():
             raise RuntimeError("Required params not set")
 
-        self.__async_tasks.append(self.__dbm.delete_encoded(self.endpoint, self.params))
+        self.__async_tasks.append(self._dbm.delete_encoded(self.endpoint, self.params))
         return self
     
     async def request_only(self) -> None:
-        if await self.__dbm.contains_encoded(self.endpoint, self.params):
+        if await self._dbm.contains_encoded(self.endpoint, self.params):
             return
         await self.request()
 
-    async def request(self) -> Union[List, Dict]:
+    async def request(self) -> Dict:
         """Request order book for symbol and save them to cache"""
-        if not self.__required_params():
+        if not self.__has_required_params():
             raise RuntimeError("Required params not set")
 
         if self.__async_tasks:
@@ -77,7 +75,7 @@ class Requestor(ABC):
                 await t
             self.__async_tasks = []
 
-        resp = await self.__dbm.fetch_encoded(
+        resp = await self._dbm.fetch_encoded(
             self.endpoint,
             self.__request_func,
             self.params,
@@ -132,75 +130,69 @@ class RateLimitContext:
         return wrapper
 
 
-class Client(ABC):
-    def __init__(self, base_url: str, headers: dict):
+class AsyncClient(ABC):
+    def __init__(self, base_url: str, headers: dict, follow_redirects: bool = True, http2: bool = True, timeout: int = 30):
         self.base_url = base_url
         self._headers = headers
-        self._session = aiohttp.ClientSession(headers=self._headers)
+        self._session = httpx.AsyncClient(headers=self._headers,
+                                          follow_redirects=follow_redirects,
+                                          http2=http2,
+                                          timeout=timeout)
 
     async def __aenter__(self):
+        await self._session.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        await self._session.close()
-
-    async def _post_signed(
-        self, signed_request: str, data: Any = None, **kwargs: Any
-    ) -> dict:
-        async with self._session.post(signed_request, data=data, **kwargs) as response:
-            return await self._handle(response)
+        await self._session.__aexit__(exc_type, exc, tb)
+        
+    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> dict:
+        response = await self._session.post(signed_request, data=data, **kwargs)
+        return await self._handle(response)
 
     async def _delete_signed(self, signed_request: str, **kwargs: Any) -> dict:
-        async with self._session.delete(signed_request, **kwargs) as response:
-            return await self._handle(response)
+        response = await self._session.delete(signed_request, **kwargs)
+        return await self._handle(response)
 
-    async def _get(
-        self,
-        endpoint: str,
-        request: Optional[str] = None,
-        allow_redirects: bool = True,
-        **kwargs: Any,
-    ) -> dict:
+    async def _get(self, endpoint: str, request: Optional[str] = None) -> dict:
         url = f"{self.base_url}{endpoint}"
         if request:
             url += f"?{request}"
 
-        async with self._session.get(
-            url, allow_redirects=allow_redirects, **kwargs
-        ) as response:
-            return await self._handle(response)
+        response = await self._session.get(url)
+        return await self._handle(response)
 
     async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
         url = f"{self.base_url}{endpoint}"
-        async with self._session.post(url, data=data, **kwargs) as response:
-            return await self._handle(response)
+        response = await self._session.post(url, data=data, **kwargs)
+        return await self._handle(response)
 
     async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
         url = f"{self.base_url}{endpoint}"
-        async with self._session.put(url, data=data, **kwargs) as response:
-            return await self._handle(response)
+        response = await self._session.put(url, data=data, **kwargs)
+        return await self._handle(response)
 
     async def _delete(self, endpoint: str, **kwargs: Any) -> dict:
         url = f"{self.base_url}{endpoint}"
-        async with self._session.delete(url, **kwargs) as response:
-            return await self._handle(response)
-
-    async def _handle(self, response: aiohttp.ClientResponse) -> dict:
+        response = await self._session.delete(url, **kwargs)
+        return await self._handle(response)
+    
+    async def _handle(self, response: httpx.Response) -> dict:
         try:
             response.raise_for_status()
-            return await response.json()
-        except ClientResponseError as e:
+            return response.json()
+
+        except httpx.HTTPStatusError as e:
             # Raised when response status code is 400 or higher
-            error_msg = f"HTTP Response Error: {e.status} {e.message}"
-            raise ClientError(
-                e.status, error_msg, await response.text(), response.headers
-            ) from e
-        except ClientConnectionError as e:
+            error_msg = f"HTTP Response Error: {e.response.status_code} {e.response.text}"
+            e.args = (error_msg, )  # Update the message
+            raise
+
+        except httpx.RequestError as e:
             # Raised in case of connection errors
-            raise RuntimeError("Connection error occurred: ", str(e)) from e
-        except ClientPayloadError as e:
-            # Raised when there is a payload error (e.g., malformed data)
-            raise RuntimeError("Payload error occurred: ", str(e)) from e
+            raise RuntimeError(f"Connection error occurred while handling the request: {e}") from e
+
         except Exception as e:
-            # Catch any other exceptions
-            raise RuntimeError("Unexpected error occurred: ", str(e)) from e
+            # Catch any other exceptions that may occur during response handling
+            raise RuntimeError(f"Unexpected error occurred while processing the response: {e}") from e
+
