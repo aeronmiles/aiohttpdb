@@ -28,7 +28,7 @@ def flatten_params(params):
         if isinstance(value, list):
             # Append each list item as a separate parameter
             for item in value:
-                flat_params.append((f"{key}[]", item))
+                flat_params.append((f"{key}", item))
         else:
             flat_params.append((key, value))
     return flat_params

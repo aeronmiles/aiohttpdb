@@ -1,13 +1,14 @@
 """
 This module provides classes for managing HTTP requests and rate limiting.
 """
-from abc import ABC
+from abc import ABC, abstractmethod
 import asyncio
 from functools import wraps
 import time
 from typing import Any, Callable, Coroutine, Dict, List, Optional, TypeVar, Union
 import httpx
-from ..db.db_manager import DatabaseManager
+from loguru import logger
+from ..db import DatabaseManager
 
 RequestorType = TypeVar("RequestorType", bound="Requestor")
 
@@ -21,14 +22,12 @@ class Requestor(ABC):
         db_manager: DatabaseManager,
         endpoint: str,
         required_params: List[str],
-        request_func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]],
         default_return_value: Any,
     ) -> None:
         self._dbm = db_manager
         self.endpoint = endpoint
         self.params = {}
         self.__required_params = required_params
-        self.__request_func = request_func
         self.__async_tasks: List[Coroutine] = []
         self._cached_only: bool = False
         self._return_data: bool = True
@@ -36,7 +35,15 @@ class Requestor(ABC):
         self._delete_from_db: bool = False
         self._default_return_value = default_return_value
     
+    @abstractmethod
+    async def _request_func(self, params: Dict) -> Coroutine[Any, Any, Optional[Any]]:
+        raise NotImplementedError("All subclasses must implement the _request_func method")
+    
     def __has_required_params(self) -> bool:
+        for p in self.__required_params:
+            if p not in self.params:
+                logger.warning(f"Missing required param: {p}")
+                
         return all([p in self.params for p in self.__required_params])
 
     def cached_only(
@@ -68,7 +75,8 @@ class Requestor(ABC):
     async def request(self) -> Dict:
         """Request order book for symbol and save them to cache"""
         if not self.__has_required_params():
-            raise RuntimeError("Required params not set")
+            logger.warning("Required params not set")
+            return self._default_return_value
 
         if self.__async_tasks:
             for t in self.__async_tasks:
@@ -77,7 +85,7 @@ class Requestor(ABC):
 
         resp = await self._dbm.fetch_encoded(
             self.endpoint,
-            self.__request_func,
+            self._request_func,
             self.params,
             self._cached_only,
             self._save,
