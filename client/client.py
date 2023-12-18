@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 import asyncio
 from functools import wraps
 import time
-from typing import Any, Callable, Coroutine, Dict, List, Optional, TypeVar, Union
+from typing import Any, Coroutine, Dict, List, Optional, TypeVar
 import httpx
 from loguru import logger
 from ..db import DatabaseManager

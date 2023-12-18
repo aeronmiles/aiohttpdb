@@ -98,3 +98,11 @@ def generate_class_from_json(json_file_path: str, output_file_path: str, class_n
         f.write("from typing import List, Optional, Any\n\n")
         f.write(class_code)
         f.write("\n")
+        
+
+def cleanNoneValue(data: dict) -> dict:
+    out = {}
+    for k in data.keys():
+        if data[k] is not None:
+            out[k] = data[k]
+    return out
