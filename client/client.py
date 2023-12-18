@@ -29,7 +29,6 @@ class Requestor(ABC):
         self.params = {}
         self.__required_params = required_params
         self.__async_tasks: List[Coroutine] = []
-        self._cached_only: bool = False
         self._return_data: bool = True
         self._save: bool = True
         self._delete_from_db: bool = False
@@ -45,12 +44,6 @@ class Requestor(ABC):
                 logger.warning(f"Missing required param: {p}")
                 
         return all([p in self.params for p in self.__required_params])
-
-    def cached_only(
-        self: RequestorType, cached_only: bool = True
-    ) -> RequestorType:
-        self._cached_only = cached_only
-        return self
 
     def return_data(self: RequestorType, return_data: bool) -> RequestorType:
         self._return_data = return_data
@@ -87,7 +80,6 @@ class Requestor(ABC):
             self.endpoint,
             self._request_func,
             self.params,
-            self._cached_only,
             self._save,
         )
         if not self._return_data or not resp:

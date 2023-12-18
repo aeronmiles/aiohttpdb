@@ -71,11 +71,10 @@ class DatabaseManager:
     async def save_dataframe(self, table_name: str, df: DataFrame) -> None:
         await self.get_db(table_name).save_dataframe(table_name, df)
 
-    async def fetch_encoded(self, namespace: str, func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]], params: Dict, cached_only: bool = False, save: bool = True) -> Optional[Any]:
+    async def fetch_encoded(self, namespace: str, func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]], params: Dict, save: bool = True) -> Optional[Any]:
         cached = await self.load_encoded(namespace, params)
-        if cached_only or cached:
-            if cached:
-                logger.info(f"{namespace} :: Loaded cached data : {params}")
+        if cached:
+            logger.info(f"{namespace} :: Loaded cached data : {params}")
             return cached
 
         try:
