@@ -2,6 +2,7 @@
 Module for handling JSON data and generating Python classes from it.
 """
 import json
+from httpxdb.error import ParameterRequiredError, ParameterTypeError, ParameterValueError
 
 
 def _build_jmespath_queries(data, current_path=''):
@@ -106,3 +107,20 @@ def cleanNoneValue(data: dict) -> dict:
         if data[k] is not None:
             out[k] = data[k]
     return out
+
+
+def check_enum_parameter(value, enum_class):
+    if value not in set(item.value for item in enum_class):
+        raise ParameterValueError([value])
+
+
+def check_type_parameter(value, name, data_type):
+    if value is not None and type(value) != data_type:
+        raise ParameterTypeError([name, data_type])
+    
+    
+def load_json(file_path: str) -> dict:
+    """Loads a json file."""
+    with open(file_path, "r", encoding="utf-8") as file:
+        data = json.load(file)
+    return data

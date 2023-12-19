@@ -13,6 +13,77 @@ from ..db import DatabaseManager
 RequestorType = TypeVar("RequestorType", bound="Requestor")
 
 
+class AsyncClient(ABC):
+    def __init__(self, base_url: str, headers: dict, follow_redirects: bool = True, http2: bool = True, timeout: int = 30):
+        self.base_url = base_url
+        self._headers = headers
+        self._session = httpx.AsyncClient(headers=self._headers,
+                                          follow_redirects=follow_redirects,
+                                          http2=http2,
+                                          timeout=timeout)
+
+    async def __aenter__(self):
+        await self._session.__aenter__()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self._session.__aexit__(exc_type, exc, tb)
+        
+    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> dict:
+        response = await self._session.post(signed_request, data=data, **kwargs)
+        return await self._handle(response)
+
+    async def _delete_signed(self, signed_request: str, **kwargs: Any) -> dict:
+        response = await self._session.delete(signed_request, **kwargs)
+        return await self._handle(response)
+    
+    @abstractmethod
+    async def get(self, endpoint: str, request: Optional[dict] = None) -> dict:
+        raise NotImplementedError("All subclasses must implement the get method")
+
+    async def _get(self, endpoint: str, request: Optional[str] = None) -> dict:
+        url = f"{self.base_url}{endpoint}"
+        if request:
+            url += f"?{request}"
+
+        response = await self._session.get(url)
+        return await self._handle(response)
+
+    async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
+        url = f"{self.base_url}{endpoint}"
+        response = await self._session.post(url, data=data, **kwargs)
+        return await self._handle(response)
+
+    async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
+        url = f"{self.base_url}{endpoint}"
+        response = await self._session.put(url, data=data, **kwargs)
+        return await self._handle(response)
+
+    async def _delete(self, endpoint: str, **kwargs: Any) -> dict:
+        url = f"{self.base_url}{endpoint}"
+        response = await self._session.delete(url, **kwargs)
+        return await self._handle(response)
+    
+    async def _handle(self, response: httpx.Response) -> dict:
+        try:
+            response.raise_for_status()
+            return response.json()
+
+        except httpx.HTTPStatusError as e:
+            # Raised when response status code is 400 or higher
+            error_msg = f"HTTP Response Error: {e.response.status_code} {e.response.text}"
+            e.args = (error_msg, )  # Update the message
+            raise
+
+        except httpx.RequestError as e:
+            # Raised in case of connection errors
+            raise RuntimeError(f"Connection error occurred while handling the request: {e}") from e
+
+        except Exception as e:
+            # Catch any other exceptions that may occur during response handling
+            raise RuntimeError(f"Unexpected error occurred while processing the response: {e}") from e
+
+
 class Requestor(ABC):
     """
     This class provides methods for managing HTTP requests.
@@ -20,11 +91,13 @@ class Requestor(ABC):
     def __init__(
         self,
         db_manager: DatabaseManager,
+        client: AsyncClient,
         endpoint: str,
         required_params: List[str],
         default_return_value: Any,
     ) -> None:
         self._dbm = db_manager
+        self._client = client
         self.endpoint = endpoint
         self.params = {}
         self.__required_params = required_params
@@ -128,71 +201,3 @@ class RateLimitContext:
                     return await func(*args, **kwargs)
             return limited
         return wrapper
-
-
-class AsyncClient(ABC):
-    def __init__(self, base_url: str, headers: dict, follow_redirects: bool = True, http2: bool = True, timeout: int = 30):
-        self.base_url = base_url
-        self._headers = headers
-        self._session = httpx.AsyncClient(headers=self._headers,
-                                          follow_redirects=follow_redirects,
-                                          http2=http2,
-                                          timeout=timeout)
-
-    async def __aenter__(self):
-        await self._session.__aenter__()
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self._session.__aexit__(exc_type, exc, tb)
-        
-    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> dict:
-        response = await self._session.post(signed_request, data=data, **kwargs)
-        return await self._handle(response)
-
-    async def _delete_signed(self, signed_request: str, **kwargs: Any) -> dict:
-        response = await self._session.delete(signed_request, **kwargs)
-        return await self._handle(response)
-
-    async def _get(self, endpoint: str, request: Optional[str] = None) -> dict:
-        url = f"{self.base_url}{endpoint}"
-        if request:
-            url += f"?{request}"
-
-        response = await self._session.get(url)
-        return await self._handle(response)
-
-    async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
-        url = f"{self.base_url}{endpoint}"
-        response = await self._session.post(url, data=data, **kwargs)
-        return await self._handle(response)
-
-    async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
-        url = f"{self.base_url}{endpoint}"
-        response = await self._session.put(url, data=data, **kwargs)
-        return await self._handle(response)
-
-    async def _delete(self, endpoint: str, **kwargs: Any) -> dict:
-        url = f"{self.base_url}{endpoint}"
-        response = await self._session.delete(url, **kwargs)
-        return await self._handle(response)
-    
-    async def _handle(self, response: httpx.Response) -> dict:
-        try:
-            response.raise_for_status()
-            return response.json()
-
-        except httpx.HTTPStatusError as e:
-            # Raised when response status code is 400 or higher
-            error_msg = f"HTTP Response Error: {e.response.status_code} {e.response.text}"
-            e.args = (error_msg, )  # Update the message
-            raise
-
-        except httpx.RequestError as e:
-            # Raised in case of connection errors
-            raise RuntimeError(f"Connection error occurred while handling the request: {e}") from e
-
-        except Exception as e:
-            # Catch any other exceptions that may occur during response handling
-            raise RuntimeError(f"Unexpected error occurred while processing the response: {e}") from e
-

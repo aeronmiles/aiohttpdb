@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 from typing import Optional
+from httpxdb.error import ParameterRequiredError
 
 
 def sign_sha256(host: str, endpoint: str, secret: str, request: Optional[str]) -> str:
@@ -32,3 +33,8 @@ def flatten_params(params):
         else:
             flat_params.append((key, value))
     return flat_params
+
+
+def check_required_parameter(value, name):
+    if not value and value != 0:
+        raise ParameterRequiredError([name])
