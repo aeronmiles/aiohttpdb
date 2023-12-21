@@ -10,6 +10,7 @@ import httpx
 from loguru import logger
 from ..db import DatabaseManager
 
+
 RequestorType = TypeVar("RequestorType", bound="Requestor")
 
 

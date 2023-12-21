@@ -20,7 +20,8 @@ class DatabaseManager:
     """
     _instance: Dict[str, 'DatabaseManager'] = {}
 
-    def __new__(cls, data_path: str, db_name: str = 'db', cache_name: str = 'cache'):
+    def __new__(cls, data_path: Union[str, Path], db_name: str = 'db', cache_name: str = 'cache'):
+        data_path = str(data_path)
         if data_path not in cls._instance:
             cls._instance[data_path] = super(DatabaseManager, cls).__new__(cls)
             cls._initialize(data_path, db_name, cache_name)
