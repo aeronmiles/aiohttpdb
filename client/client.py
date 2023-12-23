@@ -39,13 +39,13 @@ class AsyncClient(ABC):
         return await self._handle(response)
     
     @abstractmethod
-    async def get(self, endpoint: str, request: Optional[dict] = None) -> dict:
+    async def get(self, endpoint: str, params: Optional[dict] = None) -> dict:
         raise NotImplementedError("All subclasses must implement the get method")
 
-    async def _get(self, endpoint: str, request: Optional[str] = None) -> dict:
+    async def _get(self, endpoint: str, params: Optional[str] = None) -> dict:
         url = f"{self.base_url}{endpoint}"
-        if request:
-            url += f"?{request}"
+        if params:
+            url += f"?{params}"
 
         response = await self._session.get(url)
         return await self._handle(response)

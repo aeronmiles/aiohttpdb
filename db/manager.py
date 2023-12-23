@@ -6,27 +6,24 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 from loguru import logger
-
+from pandas import DataFrame
+from corex.types import Singleton
 from .sqlite import AsyncPickleSQLiteDB
 
-try:
-    from pandas import DataFrame
-except ImportError:
-    logger.error("Failed to import pandas. DataFrame functionality will not be available.")
 
-class DatabaseManager:
+class DatabaseManager(Singleton):
     """
     This class provides methods for managing a database.
     """
-    _instance: Dict[str, 'DatabaseManager'] = {}
-
     def __new__(cls, data_path: Union[str, Path], db_name: str = 'db', cache_name: str = 'cache'):
         data_path = str(data_path)
-        if data_path not in cls._instance:
-            cls._instance[data_path] = super(DatabaseManager, cls).__new__(cls)
-            cls._initialize(data_path, db_name, cache_name)
+        cls._initialize(data_path, db_name, cache_name)
 
-        return cls._instance[data_path]
+        return super(DatabaseManager, cls).__new__(cls, data_path)
+    
+    @classmethod
+    def I(cls, data_path: Union[str, Path]) -> "DatabaseManager":
+        return super().I(str(data_path))
 
     @classmethod
     def _initialize(cls, data_path: str, db_name: str = 'db', cache_name: str = 'cache'):

@@ -12,10 +12,7 @@ import zlib
 from loguru import logger
 import aiosqlite
 
-try:
-    from pandas import DataFrame
-except ImportError:
-    logger.error("Failed to import pandas. DataFrame functionality will not be available.")
+from pandas import DataFrame
 
 class AsyncPickleSQLiteDB:
     """
