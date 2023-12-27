@@ -3,24 +3,16 @@ This module provides classes for managing HTTP requests and rate limiting.
 """
 from abc import ABC, abstractmethod
 import asyncio
-from functools import wraps
 import time
 from typing import Any, Coroutine, Dict, Generic, List, Optional, TypeVar
 import httpx
-from httpx import Headers, Response
-from loguru import logger
+from corex import logger
 from ..db import DatabaseManager
 
 
 RequestorType = TypeVar("RequestorType", bound="Requestor")
 LimiterType = TypeVar("LimiterType", bound="RateLimitContext")
 T = TypeVar("T")
-
-
-from abc import ABC, abstractmethod
-import time
-import asyncio
-from typing import Dict
 
 
 class RateLimitContext(ABC):
@@ -47,7 +39,7 @@ class RateLimitContext(ABC):
             await self._acquire_token()
 
     @abstractmethod
-    async def adjust_rate_limit(self, headers: Headers):
+    async def adjust_rate_limit(self, headers: httpx.Headers):
         """
         Adjusts the rate limit based on the response headers from an API.
         Subclasses should implement this to handle specific API rate limiting schemes.
@@ -59,7 +51,7 @@ class BinanceRateLimitContext(RateLimitContext):
     def __init__(self, limit: int, interval: int):
         super().__init__(limit, interval)
 
-    async def limit(self, headers: Headers):
+    async def limit(self, headers: httpx.Headers):
         weight = int(headers.get('X-MBX-USED-WEIGHT', 0))
         weight_1m = int(headers.get('X-MBX-USED-WEIGHT-1M', 0))
         order_count_1m = int(headers.get('X-MBX-ORDER-COUNT-1M', 0))
@@ -70,7 +62,7 @@ class BinanceRateLimitContext(RateLimitContext):
         
         if retry_after > 0:
             async with self._semaphore:
-                await self._acquire_token(weight)
+                await self._acquire_token()
                 await asyncio.sleep((required_tokens - self._tokens) / self._rate)
 
 
@@ -99,11 +91,11 @@ class AsyncClient(ABC):
     async def __aexit__(self, exc_type, exc, tb):
         await self._session.__aexit__(exc_type, exc, tb)
         
-    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> Response:
+    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> httpx.Response:
         response = await self._session.post(signed_request, data=data, **kwargs)
         return await self._handle(response)
 
-    async def _delete_signed(self, signed_request: str, **kwargs: Any) -> Response:
+    async def _delete_signed(self, signed_request: str, **kwargs: Any) -> httpx.Response:
         response = await self._session.delete(signed_request, **kwargs)
         return await self._handle(response)
     
@@ -113,38 +105,38 @@ class AsyncClient(ABC):
         """
         raise NotImplementedError("All subclasses must implement the get method")
 
-    async def _get(self, endpoint: str, params: Optional[str] = None) -> Response:
+    async def _get(self, endpoint: str, params: Optional[str] = None, **kwargs) -> httpx.Response:
         url = f"{self.base_url}{endpoint}"
         if params:
             url += f"?{params}"
 
-        response = await self._session.get(url)
+        response = await self._session.get(url, **kwargs)
         await self._rate_limit_context.adjust_rate_limit(response.headers)
         return await self._handle(response)
 
-    async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> Response:
+    async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> httpx.Response:
         url = f"{self.base_url}{endpoint}"
         response = await self._session.post(url, data=data, **kwargs)
         return await self._handle(response)
 
-    async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> Response:
+    async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> httpx.Response:
         url = f"{self.base_url}{endpoint}"
         response = await self._session.put(url, data=data, **kwargs)
         return await self._handle(response)
 
-    async def _delete(self, endpoint: str, **kwargs: Any) -> Response:
+    async def _delete(self, endpoint: str, **kwargs: Any) -> httpx.Response:
         url = f"{self.base_url}{endpoint}"
         response = await self._session.delete(url, **kwargs)
         return await self._handle(response)
     
-    async def _handle(self, response: httpx.Response) -> Response:
+    async def _handle(self, response: httpx.Response) -> httpx.Response:
         try:
             response.raise_for_status()
             return response
 
         except httpx.HTTPStatusError as e:
             # Raised when response status code is 400 or higher
-            logger.error(f"HTTP Response Error: {e.response.status_code} {e.response.text}")
+            logger.error(f"HTTP httpx.Response Error: {e.response.status_code} {e.response.text}")
 
         except httpx.RequestError as e:
             # Raised in case of connection errors
@@ -163,15 +155,17 @@ class Requestor(Generic[T], ABC):
     """
     def __init__(
         self,
-        db_manager: DatabaseManager,
+        dbm: DatabaseManager,
         client: AsyncClient,
         endpoint: str,
         required_params: List[str],
         default_return_value: Any,
     ) -> None:
-        self._dbm = db_manager
+        self._dbm = dbm
         self._client = client
-        self.endpoint = endpoint
+        if not endpoint.startswith("/"):
+            endpoint = "/" + endpoint
+        self._endpoint = endpoint
         self.params = {}
         self.__required_params = required_params
         self.__async_tasks: List[Coroutine] = []
@@ -179,6 +173,10 @@ class Requestor(Generic[T], ABC):
         self._save: bool = True
         self._delete_from_db: bool = False
         self._default_return_value: T = default_return_value
+        
+    @property
+    def namespace(self) -> str:
+        return self._client.base_url + self._endpoint
     
     @abstractmethod
     async def _request_func(self, params: Dict) -> Coroutine[Any, Any, Optional[Any]]:
@@ -203,28 +201,27 @@ class Requestor(Generic[T], ABC):
         if not self.__has_required_params():
             raise RuntimeError("Required params not set")
 
-        self.__async_tasks.append(self._dbm.delete_encoded(self.endpoint, self.params))
+        self.__async_tasks.append(self._dbm.delete_encoded(self.namespace, self.params))
         return self
     
     async def request_only(self) -> None:
-        if await self._dbm.contains_encoded(self.endpoint, self.params):
+        if await self._dbm.contains_encoded(self.namespace, self.params):
             return
         await self.request()
 
     async def request(self) -> T:
         """Request order book for symbol and save them to cache"""
+        # logger.info(f"Requesting {self._endpoint} with params: {self.params}")
         if not self.__has_required_params():
             logger.warning("Required params not set")
             return self._default_return_value
 
         if self.__async_tasks:
-            tasks = self.__async_tasks.copy()
-            self.__async_tasks = []
-            for t in tasks:
+            for t in self.__async_tasks:
                 await t
 
         resp = await self._dbm.fetch_encoded(
-            self.endpoint,
+            self.namespace,
             self._request_func,
             self.params,
             self._save,
@@ -232,4 +229,4 @@ class Requestor(Generic[T], ABC):
         if not self._return_data or not resp:
             return self._default_return_value
         else:
-            return resp.json()
+            return resp

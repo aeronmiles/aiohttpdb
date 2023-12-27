@@ -54,15 +54,15 @@ class DatabaseManager:
 
     async def save_encoded(self, namespace: str, params: Dict, json_data: Any) -> None:
         await self.get_db(namespace).save_encoded(self.generate_db_key(namespace, params), json_data)
-        logger.info(f"{namespace} :: Saving cached data : {params}")
+        logger.info(f"{namespace} :: Saving data : {params}")
 
     async def save_dataframe(self, table_name: str, df: DataFrame) -> None:
         await self.get_db(table_name).save_dataframe(table_name, df)
 
-    async def fetch_encoded(self, namespace: str, func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]], params: Dict, save: bool = True) -> Optional[Any]:
+    async def fetch_encoded(self, namespace: str, func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]], params: Dict={}, save: bool = True) -> Optional[Any]:
         cached = await self.load_encoded(namespace, params)
         if cached:
-            logger.info(f"{namespace} :: Loaded cached data : {params}")
+            logger.info(f"{namespace} :: Loaded data : {params}")
             return cached
 
         try:
@@ -76,7 +76,7 @@ class DatabaseManager:
 
     async def delete_encoded(self, namespace: str, params: Dict) -> None:
         await self.get_db(namespace).delete_encoded(self.generate_db_key(namespace, params))
-        logger.info(f"{namespace} :: Deleting cached data : {params}")
+        logger.info(f"{namespace} :: Deleting data : {params}")
 
     async def close_connections(self):
         await self._DB.close()
