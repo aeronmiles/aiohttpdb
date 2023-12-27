@@ -5,23 +5,92 @@ from abc import ABC, abstractmethod
 import asyncio
 from functools import wraps
 import time
-from typing import Any, Coroutine, Dict, List, Optional, TypeVar
+from typing import Any, Coroutine, Dict, Generic, List, Optional, TypeVar
 import httpx
+from httpx import Headers, Response
 from loguru import logger
 from ..db import DatabaseManager
 
 
 RequestorType = TypeVar("RequestorType", bound="Requestor")
+LimiterType = TypeVar("LimiterType", bound="RateLimitContext")
+T = TypeVar("T")
+
+
+from abc import ABC, abstractmethod
+import time
+import asyncio
+from typing import Dict
+
+
+class RateLimitContext(ABC):
+    def __init__(self, max_calls: int, period: int, max_concurrency: int = 24):
+        self._rate = max_calls / period  # Tokens added per second
+        self._tokens = max_calls  # Maximum tokens
+        self._last = time.monotonic()
+        self._lock = asyncio.Lock()
+        self._semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def _acquire_token(self):
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last
+            self._last = now
+            self._tokens = min(self._tokens + elapsed * self._rate, self._tokens)
+            if self._tokens < 1:
+                await asyncio.sleep(1 - self._tokens / self._rate)
+                self._tokens = 1
+            self._tokens -= 1
+
+    async def limit_request(self):
+        async with self._semaphore:
+            await self._acquire_token()
+
+    @abstractmethod
+    async def adjust_rate_limit(self, headers: Headers):
+        """
+        Adjusts the rate limit based on the response headers from an API.
+        Subclasses should implement this to handle specific API rate limiting schemes.
+        """
+        raise NotImplementedError("All subclasses must implement the adjust_rate_limit method")
+    
+
+class BinanceRateLimitContext(RateLimitContext):
+    def __init__(self, limit: int, interval: int):
+        super().__init__(limit, interval)
+
+    async def limit(self, headers: Headers):
+        weight = int(headers.get('X-MBX-USED-WEIGHT', 0))
+        weight_1m = int(headers.get('X-MBX-USED-WEIGHT-1M', 0))
+        order_count_1m = int(headers.get('X-MBX-ORDER-COUNT-1M', 0))
+        ip_weight_1m = int(headers.get('X-SAPI-USED-IP-WEIGHT-1M:', 0))
+        retry_after = int(headers.get('Retry-After', 0))
+        
+        required_tokens = weight + weight_1m + order_count_1m + ip_weight_1m
+        
+        if retry_after > 0:
+            async with self._semaphore:
+                await self._acquire_token(weight)
+                await asyncio.sleep((required_tokens - self._tokens) / self._rate)
 
 
 class AsyncClient(ABC):
-    def __init__(self, base_url: str, headers: dict, follow_redirects: bool = True, http2: bool = True, timeout: int = 30):
+    def __init__(
+        self,
+        base_url: str,
+        headers: dict,
+        follow_redirects: bool = True,
+        http2: bool = True,
+        timeout: int = 30,
+        rate_limit_context: LimiterType = None
+    ):
         self.base_url = base_url
         self._headers = headers
         self._session = httpx.AsyncClient(headers=self._headers,
                                           follow_redirects=follow_redirects,
                                           http2=http2,
                                           timeout=timeout)
+        self._rate_limit_context = rate_limit_context
 
     async def __aenter__(self):
         await self._session.__aenter__()
@@ -30,62 +99,65 @@ class AsyncClient(ABC):
     async def __aexit__(self, exc_type, exc, tb):
         await self._session.__aexit__(exc_type, exc, tb)
         
-    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> dict:
+    async def _post_signed(self, signed_request: str, data: Any = None, **kwargs: Any) -> Response:
         response = await self._session.post(signed_request, data=data, **kwargs)
         return await self._handle(response)
 
-    async def _delete_signed(self, signed_request: str, **kwargs: Any) -> dict:
+    async def _delete_signed(self, signed_request: str, **kwargs: Any) -> Response:
         response = await self._session.delete(signed_request, **kwargs)
         return await self._handle(response)
     
     @abstractmethod
-    async def get(self, endpoint: str, params: Optional[dict] = None) -> dict:
+    async def get(self, endpoint: str, params: Optional[dict] = None):
+        """
+        """
         raise NotImplementedError("All subclasses must implement the get method")
 
-    async def _get(self, endpoint: str, params: Optional[str] = None) -> dict:
+    async def _get(self, endpoint: str, params: Optional[str] = None) -> Response:
         url = f"{self.base_url}{endpoint}"
         if params:
             url += f"?{params}"
 
         response = await self._session.get(url)
+        await self._rate_limit_context.adjust_rate_limit(response.headers)
         return await self._handle(response)
 
-    async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
+    async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> Response:
         url = f"{self.base_url}{endpoint}"
         response = await self._session.post(url, data=data, **kwargs)
         return await self._handle(response)
 
-    async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> dict:
+    async def _put(self, endpoint: str, data: Any = None, **kwargs: Any) -> Response:
         url = f"{self.base_url}{endpoint}"
         response = await self._session.put(url, data=data, **kwargs)
         return await self._handle(response)
 
-    async def _delete(self, endpoint: str, **kwargs: Any) -> dict:
+    async def _delete(self, endpoint: str, **kwargs: Any) -> Response:
         url = f"{self.base_url}{endpoint}"
         response = await self._session.delete(url, **kwargs)
         return await self._handle(response)
     
-    async def _handle(self, response: httpx.Response) -> dict:
+    async def _handle(self, response: httpx.Response) -> Response:
         try:
             response.raise_for_status()
-            return response.json()
+            return response
 
         except httpx.HTTPStatusError as e:
             # Raised when response status code is 400 or higher
-            error_msg = f"HTTP Response Error: {e.response.status_code} {e.response.text}"
-            e.args = (error_msg, )  # Update the message
-            raise
+            logger.error(f"HTTP Response Error: {e.response.status_code} {e.response.text}")
 
         except httpx.RequestError as e:
             # Raised in case of connection errors
-            raise RuntimeError(f"Connection error occurred while handling the request: {e}") from e
+            logger.error(f"Connection error occurred while handling the request: {e}")
 
         except Exception as e:
             # Catch any other exceptions that may occur during response handling
-            raise RuntimeError(f"Unexpected error occurred while processing the response: {e}") from e
+            logger.error(f"Unexpected error occurred while processing the response: {e}")
+
+        return response
 
 
-class Requestor(ABC):
+class Requestor(Generic[T], ABC):
     """
     This class provides methods for managing HTTP requests.
     """
@@ -106,7 +178,7 @@ class Requestor(ABC):
         self._return_data: bool = True
         self._save: bool = True
         self._delete_from_db: bool = False
-        self._default_return_value = default_return_value
+        self._default_return_value: T = default_return_value
     
     @abstractmethod
     async def _request_func(self, params: Dict) -> Coroutine[Any, Any, Optional[Any]]:
@@ -139,16 +211,17 @@ class Requestor(ABC):
             return
         await self.request()
 
-    async def request(self) -> Dict:
+    async def request(self) -> T:
         """Request order book for symbol and save them to cache"""
         if not self.__has_required_params():
             logger.warning("Required params not set")
             return self._default_return_value
 
         if self.__async_tasks:
-            for t in self.__async_tasks:
-                await t
+            tasks = self.__async_tasks.copy()
             self.__async_tasks = []
+            for t in tasks:
+                await t
 
         resp = await self._dbm.fetch_encoded(
             self.endpoint,
@@ -159,46 +232,4 @@ class Requestor(ABC):
         if not self._return_data or not resp:
             return self._default_return_value
         else:
-            return resp
-
-
-class RateLimitContext:
-    def __init__(self, period: int, max_calls: int, safety_margin: float = 0.25, max_concurrency: int = 24):
-        assert period > 0, "period must be > 0"
-        assert max_calls > 0, "max_calls must be > 0"
-        assert max_concurrency > 0, "max_concurrency must be > 0"
-        
-        self._rate = max_calls / period
-        self._capacity = max_calls / (1.0 + safety_margin)
-        self._tokens = self._capacity
-        self._last = time.monotonic()
-        self._lock = asyncio.Lock()
-        self._semaphore = asyncio.Semaphore(max_concurrency)
-
-    async def _acquire_token(self, weight: int):
-        async with self._lock:
-            now = time.monotonic()
-            elapsed = now - self._last
-            self._last = now
-
-            # Refill tokens
-            self._tokens += elapsed * self._rate
-            self._tokens = min(self._tokens, self._capacity)
-
-            # Calculate required tokens and wait if necessary
-            required_tokens = weight
-            if self._tokens < required_tokens:
-                await asyncio.sleep((required_tokens - self._tokens) / self._rate)
-                self._tokens = 0
-            else:
-                self._tokens -= required_tokens
-
-    def limit(self, weight: int = 1):
-        def wrapper(func):
-            @wraps(func)
-            async def limited(*args, **kwargs):
-                async with self._semaphore:
-                    await self._acquire_token(weight)
-                    return await func(*args, **kwargs)
-            return limited
-        return wrapper
+            return resp.json()

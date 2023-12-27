@@ -101,7 +101,7 @@ def generate_class_from_json(json_file_path: str, output_file_path: str, class_n
         f.write("\n")
         
 
-def cleanNoneValue(data: dict) -> dict:
+def clear_none_values(data: dict) -> dict:
     out = {}
     for k in data.keys():
         if data[k] is not None:

@@ -14,6 +14,7 @@ import aiosqlite
 
 from pandas import DataFrame
 
+
 class AsyncPickleSQLiteDB:
     """
     This class provides methods for managing an asynchronous SQLite database.
