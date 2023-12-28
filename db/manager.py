@@ -38,7 +38,11 @@ class DatabaseManager:
     def _hash(self, string: str) -> str:
         return blake2b(string.encode('utf-8'), digest_size=32).hexdigest()
 
-    def generate_db_key(self, namespace: str, params: Union[Dict, str]) -> str:
+    def generate_db_key(
+            self,
+            namespace: str,
+            params: Union[Dict, str]
+        ) -> str:
         param_str = json.dumps(params, separators=(',', ':')) if isinstance(params, Dict) else params
         return self._hash(namespace + param_str)
 
@@ -52,18 +56,33 @@ class DatabaseManager:
             return await db.get_encoded(key)
         return None
 
-    async def save_encoded(self, namespace: str, params: Dict, json_data: Any) -> None:
+    async def save_encoded(
+            self,
+            namespace: str,
+            params: Dict,
+            json_data: Any
+        ) -> None:
         await self.get_db(namespace).save_encoded(self.generate_db_key(namespace, params), json_data)
         logger.info(f"{namespace} :: Saving data : {params}")
 
-    async def save_dataframe(self, table_name: str, df: DataFrame) -> None:
+    async def save_dataframe(
+            self,
+            table_name: str,
+            df: DataFrame
+        ) -> None:
         await self.get_db(table_name).save_dataframe(table_name, df)
 
-    async def fetch_encoded(self, namespace: str, func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]], params: Dict={}, save: bool = True) -> Optional[Any]:
-        cached = await self.load_encoded(namespace, params)
-        if cached:
+    async def fetch_encoded(
+            self,
+            namespace: str,
+            func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]],
+            params: Dict={},
+            save: bool = True
+        ) -> Optional[Any]:
+        data = await self.load_encoded(namespace, params)
+        if data:
             logger.info(f"{namespace} :: Loaded data : {params}")
-            return cached
+            return data
 
         try:
             _data = await func(params)
