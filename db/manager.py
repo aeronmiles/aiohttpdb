@@ -7,16 +7,13 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, Optional, Union
 from loguru import logger
 from pandas import DataFrame
-from corex.env import env_var
 from .sqlite import AsyncPickleSQLiteDB
 
 
-class DatabaseManager:
-    """
-    This class provides methods for managing a database.
-    """
-    def __init__(self):
-        self._data_path = Path(env_var('DATA_PATH'))
+class DatabaseManager:   
+    """This class provides methods for managing a database."""
+    def __init__(self, data_path: Path):
+        self._data_path = data_path
         self._db_name = "db"
         self._cache_name = "cache"
         self._DB = AsyncPickleSQLiteDB(self._data_path, self._db_name)

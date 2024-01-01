@@ -3,6 +3,7 @@ This module provides classes for managing HTTP requests and rate limiting.
 """
 from abc import ABC, abstractmethod
 import asyncio
+from copy import deepcopy
 import time
 from typing import Any, Coroutine, Dict, Generic, List, Optional, TypeVar
 import httpx
@@ -15,28 +16,39 @@ LimiterType = TypeVar("LimiterType", bound="RateLimitContext")
 T = TypeVar("T")
 
 
-class RateLimitContext(ABC):
-    def __init__(self, max_calls: int, period: int, max_concurrency: int = 24):
+class RateLimitContext(ABC):    
+    def __init__(self, max_calls: int, period: int, max_concurrency: int = 1000):
+        self._max_calls = max_calls  # Period in seconds
         self._rate = max_calls / period  # Tokens added per second
         self._tokens = max_calls  # Maximum tokens
         self._last = time.monotonic()
         self._lock = asyncio.Lock()
         self._semaphore = asyncio.Semaphore(max_concurrency)
+    
+    async def set_used_tokens(self, used: int):
+        async with self._lock:
+            self._tokens = self._max_calls - used
+            
+    async def sleep(self, seconds: float):
+        async with self._lock:
+            await asyncio.sleep(seconds)
 
-    async def _acquire_token(self):
+    async def _acquire_token(self, weight: int = 1):
         async with self._lock:
             now = time.monotonic()
             elapsed = now - self._last
             self._last = now
             self._tokens = min(self._tokens + elapsed * self._rate, self._tokens)
-            if self._tokens < 1:
-                await asyncio.sleep(1 - self._tokens / self._rate)
-                self._tokens = 1
-            self._tokens -= 1
+            required_tokens = weight
+            if self._tokens < required_tokens:
+                logger.debug(f"Sleeping for {required_tokens - self._tokens / self._rate} seconds")
+                await asyncio.sleep(required_tokens - self._tokens / self._rate)
+                self._tokens = required_tokens
+            self._tokens -= required_tokens
 
-    async def limit_request(self):
+    async def limit_request(self, weight: int = 1):
         async with self._semaphore:
-            await self._acquire_token()
+            await self._acquire_token(weight)
 
     @abstractmethod
     async def adjust_rate_limit(self, headers: httpx.Headers):
@@ -46,25 +58,6 @@ class RateLimitContext(ABC):
         """
         raise NotImplementedError("All subclasses must implement the adjust_rate_limit method")
     
-
-class BinanceRateLimitContext(RateLimitContext):
-    def __init__(self, limit: int, interval: int):
-        super().__init__(limit, interval)
-
-    async def limit(self, headers: httpx.Headers):
-        weight = int(headers.get('X-MBX-USED-WEIGHT', 0))
-        weight_1m = int(headers.get('X-MBX-USED-WEIGHT-1M', 0))
-        order_count_1m = int(headers.get('X-MBX-ORDER-COUNT-1M', 0))
-        ip_weight_1m = int(headers.get('X-SAPI-USED-IP-WEIGHT-1M:', 0))
-        retry_after = int(headers.get('Retry-After', 0))
-        
-        required_tokens = weight + weight_1m + order_count_1m + ip_weight_1m
-        
-        if retry_after > 0:
-            async with self._semaphore:
-                await self._acquire_token()
-                await asyncio.sleep((required_tokens - self._tokens) / self._rate)
-
 
 class AsyncClient(ABC):
     def __init__(
@@ -76,6 +69,8 @@ class AsyncClient(ABC):
         timeout: int = 30,
         rate_limit_context: LimiterType = None
     ):
+        if base_url.endswith("/"):
+            base_url = base_url[:-1]
         self.base_url = base_url
         self._headers = headers
         self._session = httpx.AsyncClient(headers=self._headers,
@@ -112,6 +107,7 @@ class AsyncClient(ABC):
 
         response = await self._session.get(url, **kwargs)
         await self._rate_limit_context.adjust_rate_limit(response.headers)
+        await self._rate_limit_context.limit_request()
         return await self._handle(response)
 
     async def _post(self, endpoint: str, data: Any = None, **kwargs: Any) -> httpx.Response:
@@ -147,8 +143,39 @@ class AsyncClient(ABC):
             logger.error(f"Unexpected error occurred while processing the response: {e}")
 
         return response
+    
+
+class IDataRequestor(ABC):
+    @abstractmethod
+    async def request(self, params: Dict[str, Any]):
+        raise NotImplementedError("All subclasses must implement the request method")
 
 
+class HTTPRequestor(Generic[T], IDataRequestor):
+    def __init__(self, client: AsyncClient, endpoint: str, required_params: List[str]):
+        self._client = client
+        self._endpoint = endpoint if endpoint.startswith("/") else "/" + endpoint
+        self.params = {}
+        self._required_params = required_params
+
+    def has_required_params(self) -> bool:
+        missing_params = [p for p in self._required_params if p not in self.params]
+        if missing_params:
+            logger.warning(f"Missing required params: {missing_params}")
+            return False
+        return True
+
+    @abstractmethod
+    async def _request_func(self, params: Dict[str, Any]) -> Coroutine[Any, Any, Optional[T]]:
+        raise NotImplementedError
+
+    async def request(self) -> Optional[T]:
+        if not self.has_required_params():
+            return None
+        return await self._request_func(self.params)
+    
+
+# @TODO: Change to DBRequestor and break out request method for composition
 class Requestor(Generic[T], ABC):
     """
     This class provides methods for managing HTTP requests.
@@ -169,7 +196,6 @@ class Requestor(Generic[T], ABC):
         self.params = {}
         self.__required_params = required_params
         self.__async_tasks: List[Coroutine] = []
-        self._return_data: bool = True
         self._save: bool = True
         self._delete_from_db: bool = False
         self._default_return_value: T = default_return_value
@@ -188,10 +214,6 @@ class Requestor(Generic[T], ABC):
                 logger.warning(f"Missing required param: {p}")
                 
         return all([p in self.params for p in self.__required_params])
-
-    def return_data(self: RequestorType, return_data: bool) -> RequestorType:
-        self._return_data = return_data
-        return self
 
     def save(self: RequestorType, save: bool) -> RequestorType:
         self._save = save
@@ -214,7 +236,7 @@ class Requestor(Generic[T], ABC):
         # logger.info(f"Requesting {self._endpoint} with params: {self.params}")
         if not self.__has_required_params():
             logger.warning("Required params not set")
-            return self._default_return_value
+            return deepcopy(self._default_return_value)
 
         if self.__async_tasks:
             for t in self.__async_tasks:
@@ -226,7 +248,7 @@ class Requestor(Generic[T], ABC):
             self.params,
             self._save,
         )
-        if not self._return_data or not resp:
-            return self._default_return_value
+        if not resp:
+            return deepcopy(self._default_return_value)
         else:
             return resp
