@@ -16,7 +16,7 @@ LimiterType = TypeVar("LimiterType", bound="RateLimitContext")
 T = TypeVar("T")
 
 
-class RateLimitContext(ABC):    
+class RateLimitContext:    
     def __init__(self, max_calls: int, period: int, max_concurrency: int = 1000):
         self._max_calls = max_calls  # Period in seconds
         self._rate = max_calls / period  # Tokens added per second
@@ -56,7 +56,7 @@ class RateLimitContext(ABC):
         Adjusts the rate limit based on the response headers from an API.
         Subclasses should implement this to handle specific API rate limiting schemes.
         """
-        raise NotImplementedError("All subclasses must implement the adjust_rate_limit method")
+        pass
     
 
 class AsyncClient(ABC):
