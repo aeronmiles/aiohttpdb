@@ -106,7 +106,7 @@ class AsyncPickleSQLiteDB:
         query = f'SELECT 1 FROM "__ENCODED_DATA__" WHERE key = ?'
         return (await self._execute(query, (key,))) is not None
 
-    async def get_encoded(self, key: str) -> Union[Any, None]:
+    async def get_encoded(self, key: str) -> Optional[Any]:
         if 'r' not in self._permissions:
             raise PermissionError("Read permission not granted.")
         
