@@ -1,8 +1,19 @@
 """
 Module for handling JSON data and generating Python classes from it.
 """
+import dataclasses
 import json
 from httpxdb.error import ParameterRequiredError, ParameterTypeError, ParameterValueError
+
+
+# TODO: Validate this function
+def check_type_mismatches(dataclass_type, **kwargs):
+    for field in dataclasses.fields(dataclass_type):
+        if field.name in kwargs:
+            if dataclasses.is_dataclass(field.type):
+                check_type_mismatches(field.type, **kwargs[field.name])
+            elif not isinstance(kwargs[field.name], field.type):
+                print(f"Type mismatch: {field.name} should be {field.type}, but got {type(kwargs[field.name])}")
 
 
 def _build_jmespath_queries(data, current_path=''):

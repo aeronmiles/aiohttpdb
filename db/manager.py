@@ -74,7 +74,7 @@ class DatabaseManager:
             namespace: str,
             func: Callable[[Dict], Coroutine[Any, Any, Optional[Any]]],
             params: Dict={},
-            save: bool = True
+            save: bool = False
         ) -> Optional[Any]:
         data = await self.load_encoded(namespace, params)
         if data:

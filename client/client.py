@@ -211,7 +211,7 @@ class Requestor(Generic[T], ABC):
     def __has_required_params(self) -> bool:
         for p in self.__required_params:
             if p not in self.params:
-                logger.warning(f"Missing required param: {p}")
+                logger.error(f"Missing required param: {p}")
                 
         return all([p in self.params for p in self.__required_params])
 
@@ -221,7 +221,7 @@ class Requestor(Generic[T], ABC):
 
     def delete_from_db(self: RequestorType) -> RequestorType:
         if not self.__has_required_params():
-            raise RuntimeError("Required params not set")
+            return self
 
         self.__async_tasks.append(self._dbm.delete_encoded(self.namespace, self.params))
         return self
