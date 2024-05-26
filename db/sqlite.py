@@ -19,7 +19,7 @@ class AsyncPickleSQLiteDB:
     """
     This class provides methods for managing an asynchronous SQLite database.
     """
-    def __init__(self, data_path: Path, name: str = 'db', permissions: str = 'crw'):
+    def __init__(self, data_path: Path, name: str = 'db', permissions: str = 'crw', compress: bool = False):
         """
         Initializes the database.
 
@@ -31,6 +31,7 @@ class AsyncPickleSQLiteDB:
         self._db_path = os.path.join(data_path, f'{name}.sqlite')
         self._permissions = set(permissions)
         self._lock = asyncio.Lock()
+        self.__compress = compress
 
         self._conn = None  # Placeholder for the persistent connection
         if not os.path.isfile(self._db_path):
@@ -55,10 +56,17 @@ class AsyncPickleSQLiteDB:
         await self._execute(query)
     
     def _encode(self, obj):
-        return sqlite3.Binary(zlib.compress(pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)))
+      data = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+      if self.__compress:
+        data = zlib.compress(data)
+      
+      return sqlite3.Binary(data)
 
     def _decode(self, obj) -> Any:
+      if self.__compress:
         return pickle.loads(zlib.decompress(bytes(obj)))
+      else:
+        return pickle.loads(bytes(obj))
 
     async def _execute(self, query: str, args: Optional[tuple] = None):
         async with self._lock:
@@ -106,7 +114,7 @@ class AsyncPickleSQLiteDB:
         query = f'SELECT 1 FROM "__ENCODED_DATA__" WHERE key = ?'
         return (await self._execute(query, (key,))) is not None
 
-    async def get_encoded(self, key: str) -> Union[Any, None]:
+    async def get_encoded(self, key: str) -> Optional[Any]:
         if 'r' not in self._permissions:
             raise PermissionError("Read permission not granted.")
         

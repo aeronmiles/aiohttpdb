@@ -17,7 +17,7 @@ T = TypeVar("T")
 
 
 class RateLimitContext:    
-    def __init__(self, max_calls: int, period: int, max_concurrency: int = 1000):
+    def __init__(self, max_calls: int, period: int, max_concurrency: int = 1):
         self._max_calls = max_calls  # Period in seconds
         self._rate = max_calls / period  # Tokens added per second
         self._tokens = max_calls  # Maximum tokens
@@ -38,12 +38,15 @@ class RateLimitContext:
             now = time.monotonic()
             elapsed = now - self._last
             self._last = now
-            self._tokens = min(self._tokens + elapsed * self._rate, self._tokens)
+            self._tokens = min(self._tokens + (elapsed * self._rate), self._max_calls)
             required_tokens = weight
             if self._tokens < required_tokens:
-                logger.debug(f"Sleeping for {required_tokens - self._tokens / self._rate} seconds")
-                await asyncio.sleep(required_tokens - self._tokens / self._rate)
-                self._tokens = required_tokens
+                logger.debug(f"Sleeping for {(required_tokens - self._tokens) / self._rate} seconds")
+                await asyncio.sleep((required_tokens - self._tokens) / self._rate)
+                now = time.monotonic()
+                elapsed = now - self._last
+                self._last = now
+                self._tokens = min(self._tokens + (elapsed * self._rate), self._max_calls)
             self._tokens -= required_tokens
 
     async def limit_request(self, weight: int = 1):
@@ -173,7 +176,7 @@ class HTTPRequestor(Generic[T], IDataRequestor):
         if not self.has_required_params():
             return None
         return await self._request_func(self.params)
-    
+
 
 # @TODO: Change to DBRequestor and break out request method for composition
 class Requestor(Generic[T], ABC):
@@ -187,6 +190,7 @@ class Requestor(Generic[T], ABC):
         endpoint: str,
         required_params: List[str],
         default_return_value: Any,
+        # request_weight: int
     ) -> None:
         self._dbm = dbm
         self._client = client
@@ -199,6 +203,7 @@ class Requestor(Generic[T], ABC):
         self._save: bool = True
         self._delete_from_db: bool = False
         self._default_return_value: T = default_return_value
+        # self._request_weight: int = request_weight
         
     @property
     def namespace(self) -> str:
@@ -235,8 +240,7 @@ class Requestor(Generic[T], ABC):
         """Request order book for symbol and save them to cache"""
         # logger.info(f"Requesting {self._endpoint} with params: {self.params}")
         if not self.__has_required_params():
-            logger.warning("Required params not set")
-            return deepcopy(self._default_return_value)
+            raise RuntimeError("Required params not set")
 
         if self.__async_tasks:
             for t in self.__async_tasks:
